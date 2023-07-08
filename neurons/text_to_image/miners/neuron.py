@@ -160,6 +160,8 @@ def main( config ):
     # --- Build Synapse ---
     class StableDiffusion( bittensor.TextToImageSynapse ):
 
+        is_busy = False
+
         def priority( self, forward_call: "bittensor.SynapseCall" ) -> float: 
             # return base_miner.priority( forward_call )
             return 0.0
@@ -170,107 +172,121 @@ def main( config ):
         
         def forward( self, text: str, image: str, height: int, width: int, num_images_per_prompt: int, num_inference_steps: int, guidance_scale: float, strength: float, negative_prompt: str, seed: int ) -> List[str]:
             
-            use_image = False
-            t2i = text2img
-            i2i = img2img
-            
-            if num_images_per_prompt >= 4: # TODO: specify in config 
-                return "Stable Diffusion only supports num_images_per_prompt <= 4"
-            
-            if image != "":
-                # check if image is valid base64
-                try:
-                    base64.b64decode(image)
-                    use_image = True
-                except Exception as e:
-                    pass
 
-            if(seed == -1):
-                seed = torch.randint(1000000000, (1,)).item()
-
-            generator = torch.Generator(device=config.device).manual_seed(seed)
-
-            # extract out lora models from prompt
-            lora_models, text = extract_lora_models(text)
-            negative_lora_models, negative_prompt = extract_lora_models(negative_prompt)
-            
-
-            # loop all negative lora models, math abs them, then make them negative
-            for i in range(len(negative_lora_models)):
-                negative_lora_models[i] = (negative_lora_models[i][0], -abs(negative_lora_models[i][1]))
-
-            if use_image:
-                # turn image from base64 to PIL image
-                # Load bytes into a PIL image
-                image_bytes = base64.b64decode(image)
-                processed_image = Image.open(BytesIO(image_bytes))
-
-
-                # load lora weights
-                for model, weight in lora_models:
+            def run():
+                use_image = False
+                t2i = text2img
+                i2i = img2img
+                
+                if num_images_per_prompt >= 4: # TODO: specify in config 
+                    return "Stable Diffusion only supports num_images_per_prompt <= 4"
+                
+                if image != "":
+                    # check if image is valid base64
                     try:
-                        i2i = load_lora_weights(i2i, model, weight)
+                        base64.b64decode(image)
+                        use_image = True
                     except Exception as e:
-                        None
-                    
-                # load negative lora weights
-                for model, weight in negative_lora_models:
-                    i2i = load_lora_weights(i2i, model, weight)
+                        pass
 
-                images = i2i( 
-                    prompt  = text,
-                    image = processed_image,
-                    num_images_per_prompt = num_images_per_prompt,
-                    num_inference_steps = num_inference_steps,
-                    guidance_scale = guidance_scale,
-                    strength = strength,
-                    negative_prompt = negative_prompt,
-                    generator = generator
-                    
-                    # safety_checker = None,
-                )
+                if(seed == -1):
+                    seed = torch.randint(1000000000, (1,)).item()
 
-                # reset lora weights
-                img2img.text_encoder.load_state_dict(img2img_text_encoder_state_dict)
-                img2img.unet.load_state_dict(img2img_unet_state_dict)
-            else:
+                generator = torch.Generator(device=config.device).manual_seed(seed)
 
-                try:
-                    bittensor.logging.trace("loading lora weights")
+                # extract out lora models from prompt
+                lora_models, text = extract_lora_models(text)
+                negative_lora_models, negative_prompt = extract_lora_models(negative_prompt)
+                
+
+                # loop all negative lora models, math abs them, then make them negative
+                for i in range(len(negative_lora_models)):
+                    negative_lora_models[i] = (negative_lora_models[i][0], -abs(negative_lora_models[i][1]))
+
+                if use_image:
+                    # turn image from base64 to PIL image
+                    # Load bytes into a PIL image
+                    image_bytes = base64.b64decode(image)
+                    processed_image = Image.open(BytesIO(image_bytes))
+
+
                     # load lora weights
                     for model, weight in lora_models:
-                        t2i = load_lora_weights(t2i, model, weight)
-                    
+                        try:
+                            i2i = load_lora_weights(i2i, model, weight)
+                        except Exception as e:
+                            None
+                        
                     # load negative lora weights
                     for model, weight in negative_lora_models:
-                        t2i = load_lora_weights(t2i, model, weight)
-                except Exception as e:
-                    bittensor.logging.error('Error loading lora weights: {}', e)
-                    return "Error loading lora weights: {}".format(e)
+                        i2i = load_lora_weights(i2i, model, weight)
 
-                images = t2i( 
-                    prompt = text,
-                    height = height,
-                    width = width,
-                    num_images_per_prompt = num_images_per_prompt,
-                    num_inference_steps = num_inference_steps,
-                    guidance_scale = guidance_scale,
-                    negative_prompt = negative_prompt,
-                    generator=generator,
-                    # safety_checker = None,
-                )
+                    images = i2i( 
+                        prompt  = text,
+                        image = processed_image,
+                        num_images_per_prompt = num_images_per_prompt,
+                        num_inference_steps = num_inference_steps,
+                        guidance_scale = guidance_scale,
+                        strength = strength,
+                        negative_prompt = negative_prompt,
+                        generator = generator
+                        
+                        # safety_checker = None,
+                    )
 
-                # reset lora weights
-                text2img.text_encoder.load_state_dict(text2img_text_encoder_state_dict)
-                text2img.unet.load_state_dict(text2img_unet_state_dict)
+                    # reset lora weights
+                    img2img.text_encoder.load_state_dict(img2img_text_encoder_state_dict)
+                    img2img.unet.load_state_dict(img2img_unet_state_dict)
+                else:
 
-            buffered = BytesIO()
-            images.images[0].save(buffered, format="PNG")
-            # images.images[0].show()
-            image_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+                    try:
+                        bittensor.logging.trace("loading lora weights")
+                        # load lora weights
+                        for model, weight in lora_models:
+                            t2i = load_lora_weights(t2i, model, weight)
+                        
+                        # load negative lora weights
+                        for model, weight in negative_lora_models:
+                            t2i = load_lora_weights(t2i, model, weight)
+                    except Exception as e:
+                        bittensor.logging.error('Error loading lora weights: {}', e)
+                        return "Error loading lora weights: {}".format(e)
 
-            return image_base64
+                    images = t2i( 
+                        prompt = text,
+                        height = height,
+                        width = width,
+                        num_images_per_prompt = num_images_per_prompt,
+                        num_inference_steps = num_inference_steps,
+                        guidance_scale = guidance_scale,
+                        negative_prompt = negative_prompt,
+                        generator=generator,
+                        # safety_checker = None,
+                    )
+
+                    # reset lora weights
+                    text2img.text_encoder.load_state_dict(text2img_text_encoder_state_dict)
+                    text2img.unet.load_state_dict(text2img_unet_state_dict)
+
+                buffered = BytesIO()
+                images.images[0].save(buffered, format="PNG")
+                # images.images[0].show()
+                image_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+                return image_base64
         
+            if(self.is_busy):
+                return "busy, please try again later"
+            result = None
+            self.is_busy = True
+            try:
+                result = run()
+            except Exception as e:
+                result = str(e)
+            finally:
+                self.is_busy = False
+                return result
+
     # --- Attach the synapse to the miner ----
     base_miner.axon.attach( StableDiffusion() )
 
